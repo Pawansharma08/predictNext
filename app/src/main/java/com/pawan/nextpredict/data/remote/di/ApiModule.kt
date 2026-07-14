@@ -1,6 +1,6 @@
 package com.pawan.nextpredict.data.remote.di
 
-import com.pawan.nextpredict.data.remote.api.AlphaVantageApi
+import com.pawan.nextpredict.data.remote.api.YahooFinanceApi
 import com.pawan.nextpredict.data.remote.api.GrokApi
 import com.pawan.nextpredict.data.repository.PredictionRepositoryImpl
 import com.pawan.nextpredict.domain.repository.PredictionRepository
@@ -28,10 +28,11 @@ abstract class ApiModule {
 
         @Provides
         @Singleton
-        fun provideAlphaVantageApi(retrofit: Retrofit): AlphaVantageApi = retrofit.create()
+        fun provideYahooFinanceApi(retrofit: Retrofit): YahooFinanceApi = retrofit.create()
 
         @Provides
         @Singleton
         fun provideGrokApi(@Named("grok") grokRetrofit: Retrofit): GrokApi = grokRetrofit.create()
     }
 }
+

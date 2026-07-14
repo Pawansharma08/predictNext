@@ -7,13 +7,15 @@ import com.pawan.nextpredict.core.common.AppException
 import com.pawan.nextpredict.domain.model.HistoricalDataPoint
 import com.pawan.nextpredict.domain.model.PricePrediction
 import com.pawan.nextpredict.domain.model.StockQuote
+import com.pawan.nextpredict.domain.usecase.stock.GetStockQuoteUseCase
 import com.pawan.nextpredict.domain.usecase.stock.GetHistoricalDataUseCase
+import com.pawan.nextpredict.domain.usecase.stock.GetYahooChartDataUseCase
 import com.pawan.nextpredict.domain.usecase.stock.GetPricePredictionUseCase
 import com.pawan.nextpredict.domain.usecase.watchlist.IsSymbolInWatchlistUseCase
 import com.pawan.nextpredict.domain.usecase.watchlist.AddStockToWatchlistUseCase
 import com.pawan.nextpredict.domain.usecase.watchlist.RemoveStockFromWatchlistUseCase
-import com.pawan.nextpredict.domain.usecase.stock.GetStockQuoteUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
+
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
@@ -55,6 +57,7 @@ enum class ChartPeriod(val label: String, val days: Int) {
 class StockDetailViewModel @Inject constructor(
     private val getStockQuoteUseCase: GetStockQuoteUseCase,
     private val getHistoricalDataUseCase: GetHistoricalDataUseCase,
+    private val getYahooChartDataUseCase: GetYahooChartDataUseCase,
     private val isSymbolInWatchlistUseCase: IsSymbolInWatchlistUseCase,
     private val addStockToWatchlistUseCase: AddStockToWatchlistUseCase,
     private val removeStockFromWatchlistUseCase: RemoveStockFromWatchlistUseCase,
@@ -64,10 +67,9 @@ class StockDetailViewModel @Inject constructor(
     companion object {
         /**
          * Auto-refresh interval in milliseconds.
-         * 5 minutes = safe for Alpha Vantage free tier (25 calls/day).
-         * Change to 60_000L if you have a premium API key.
+         * 5 seconds = real-time feeling moving charts (no key limits with Yahoo).
          */
-        private const val AUTO_REFRESH_INTERVAL_MS = 5 * 60 * 1000L
+        private const val AUTO_REFRESH_INTERVAL_MS = 5 * 1000L
     }
 
     /** Holds the coroutine that auto-polls for fresh price data. */
@@ -93,6 +95,14 @@ class StockDetailViewModel @Inject constructor(
             fetchQuoteAndChart(symbol, isInitialLoad = true)
         }
 
+        // Pre-fetch 100-day daily history in the background to cache for Grok AI predictions
+        viewModelScope.launch {
+            val dailyResult = getYahooChartDataUseCase(symbol, interval = "1d", range = "3mo")
+            if (dailyResult is ApiResult.Success) {
+                cachedDailyHistory = dailyResult.data
+            }
+        }
+
         // Start auto-polling every AUTO_REFRESH_INTERVAL_MS
         startPolling(symbol)
     }
@@ -113,58 +123,85 @@ class StockDetailViewModel @Inject constructor(
 
     private suspend fun fetchQuoteAndChart(symbol: String, isInitialLoad: Boolean) {
         if (!isInitialLoad) {
-            _uiState.update { it.copy(isRefreshing = true) }
+            // Quiet refresh for polling so it doesn't show loading indicator
+            _uiState.update { it.copy(isRefreshing = false) }
         }
         when (val result = getStockQuoteUseCase(symbol)) {
             is ApiResult.Success -> {
+                val currentPrice = result.data.lastPrice
                 val timestamp = LocalTime.now().format(timeFormatter)
-                _uiState.update {
-                    it.copy(
+                
+                _uiState.update { state ->
+                    // Stretch the last candle locally to create the "live moving candle" effect
+                    val updatedPoints = state.chartPoints.toMutableList()
+                    if (updatedPoints.isNotEmpty()) {
+                        val lastIdx = updatedPoints.lastIndex
+                        val lastPoint = updatedPoints[lastIdx]
+                        updatedPoints[lastIdx] = lastPoint.copy(
+                            close = currentPrice,
+                            high = maxOf(lastPoint.high, currentPrice),
+                            low = if (lastPoint.low == 0.0) currentPrice else minOf(lastPoint.low, currentPrice)
+                        )
+                    }
+                    state.copy(
                         isLoading     = false,
                         isRefreshing  = false,
                         quote         = result.data,
                         error         = null,
                         isLive        = true,
                         lastUpdatedAt = timestamp,
+                        chartPoints   = updatedPoints
                     )
                 }
-                loadChartData(symbol, _uiState.value.selectedChartPeriod)
+                
+                // Only load historical chart data from network on initial load
+                if (isInitialLoad) {
+                    loadChartData(symbol, _uiState.value.selectedChartPeriod)
+                }
             }
-            is ApiResult.Error -> _uiState.update {
-                it.copy(
-                    isLoading    = false,
-                    isRefreshing = false,
-                    error        = result.exception,
-                    isLive       = false,
-                )
+            is ApiResult.Error -> {
+                if (isInitialLoad) {
+                    _uiState.update {
+                        it.copy(
+                            isLoading    = false,
+                            isRefreshing = false,
+                            error        = result.exception,
+                            isLive       = false,
+                        )
+                    }
+                }
             }
             ApiResult.Loading -> Unit
         }
     }
+
 
     /** Caches daily history points to avoid redundant network calls during prediction. */
     private var cachedDailyHistory: List<HistoricalDataPoint> = emptyList()
 
     private fun loadChartData(symbol: String, period: ChartPeriod) {
         _uiState.update { it.copy(isChartLoading = true) }
+        
+        // Define interval and range based on selected period
+        val (yahooInterval, yahooRange) = when (period) {
+            ChartPeriod.ONE_DAY -> Pair("5m", "1d")         // 5-minute candles over last 1 day
+            ChartPeriod.ONE_WEEK -> Pair("15m", "5d")       // 15-minute candles over last 5 days
+            ChartPeriod.ONE_MONTH -> Pair("1d", "1mo")      // Daily candles over last 1 month
+            ChartPeriod.THREE_MONTHS -> Pair("1d", "3mo")   // Daily candles over last 3 months
+            ChartPeriod.SIX_MONTHS -> Pair("1d", "6mo")     // Daily candles over last 6 months
+            ChartPeriod.ONE_YEAR -> Pair("1d", "1y")        // Daily candles over last 1 year
+            ChartPeriod.FIVE_YEARS -> Pair("1d", "5y")      // Daily candles over last 5 years
+        }
+
         viewModelScope.launch {
-            val result = getHistoricalDataUseCase(
+            val result = getYahooChartDataUseCase(
                 symbol = symbol,
-                fromDate = "",
-                toDate = ""
+                interval = yahooInterval,
+                range = yahooRange
             )
             when (result) {
                 is ApiResult.Success -> {
-                    cachedDailyHistory = result.data
-                    val limit = when (period) {
-                        ChartPeriod.ONE_DAY -> 7
-                        ChartPeriod.ONE_WEEK -> 15
-                        ChartPeriod.ONE_MONTH -> 30
-                        ChartPeriod.THREE_MONTHS -> 60
-                        else -> 100
-                    }
-                    val points = result.data.takeLast(limit).toList()
-                    _uiState.update { it.copy(isChartLoading = false, chartPoints = points) }
+                    _uiState.update { it.copy(isChartLoading = false, chartPoints = result.data) }
                 }
                 else -> {
                     _uiState.update { it.copy(isChartLoading = false, chartPoints = emptyList()) }
@@ -172,6 +209,7 @@ class StockDetailViewModel @Inject constructor(
             }
         }
     }
+
 
     fun refresh() {
         val symbol = _uiState.value.symbol

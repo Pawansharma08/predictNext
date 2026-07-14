@@ -32,3 +32,15 @@ class GetHistoricalDataUseCase @Inject constructor(
     ): ApiResult<List<HistoricalDataPoint>> =
         repository.getHistoricalData(symbol, series, fromDate, toDate)
 }
+
+class GetYahooChartDataUseCase @Inject constructor(
+    private val repository: StockRepository,
+) {
+    suspend operator fun invoke(
+        symbol: String,
+        interval: String,
+        range: String,
+    ): ApiResult<List<HistoricalDataPoint>> =
+        repository.getYahooChartData(symbol, interval, range)
+}
+

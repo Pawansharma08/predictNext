@@ -2,7 +2,7 @@ package com.pawan.nextpredict.data.repository
 
 import com.pawan.nextpredict.core.common.ApiResult
 import com.pawan.nextpredict.core.common.safeApiCall
-import com.pawan.nextpredict.data.remote.api.AlphaVantageApi
+import com.pawan.nextpredict.data.remote.api.YahooFinanceApi
 import com.pawan.nextpredict.data.remote.mapper.*
 import com.pawan.nextpredict.domain.model.*
 import com.pawan.nextpredict.domain.repository.StockRepository
@@ -11,21 +11,19 @@ import javax.inject.Singleton
 
 @Singleton
 class StockRepositoryImpl @Inject constructor(
-    private val api: AlphaVantageApi,
+    private val api: YahooFinanceApi,
 ) : StockRepository {
 
     override suspend fun getStockQuote(symbol: String): ApiResult<StockQuote> = safeApiCall {
-        val response = api.getGlobalQuote(symbol)
-        val info = response.information ?: response.note
-        if (info != null) {
-            throw IllegalStateException("Alpha Vantage API Alert: $info")
-        }
-        response.toDomain()
+        // Query the chart endpoint (range=1d) as a quote proxy since direct quotes require auth
+        val response = api.getChartData(symbol = symbol, interval = "1d", range = "1d")
+        response.toDomainQuote()
     }
 
 
     override suspend fun getOptionChain(symbol: String): ApiResult<OptionChain> = safeApiCall {
-        val quoteResult = api.getGlobalQuote(symbol).toDomain()
+        val quoteResult = getStockQuote(symbol).getOrNull() 
+            ?: throw IllegalStateException("Cannot fetch underlying value for option chain")
         val underlying = quoteResult.lastPrice
         
         // Generate a mock option chain around the last traded price for UI rendering
@@ -96,36 +94,35 @@ class StockRepositoryImpl @Inject constructor(
         fromDate: String,
         toDate: String,
     ): ApiResult<List<HistoricalDataPoint>> = safeApiCall {
-        // "compact" returns the last 100 daily data points for free.
-        val response = api.getTimeSeriesDaily(symbol, outputSize = "compact")
-        val info = response.information ?: response.note
-        if (info != null) {
-            throw IllegalStateException("Alpha Vantage API Alert: $info")
-        }
-        response.toDomain()
+        // "3mo" range gives ~60 trading days of daily candles, fitting our compact needs
+        api.getChartData(symbol = symbol, interval = "1d", range = "3mo").toDomain()
     }
 
-
-    /**
-     * Fetches 1-minute (or configurable interval) intraday candles.
-     * "compact" outputsize returns the last ~100 candles — enough for the
-     * AI prediction context (we only need the last 30).
-     */
     override suspend fun getIntradayData(
         symbol: String,
         interval: String,
     ): ApiResult<List<HistoricalDataPoint>> = safeApiCall {
-        val response = api.getTimeSeriesIntraday(symbol = symbol, interval = interval)
-        val info = response.information ?: response.note
-        if (info != null) {
-            throw IllegalStateException("Alpha Vantage API Alert: $info")
+        // Convert interval format if needed ("1min" -> "1m", "5min" -> "5m")
+        val yahooInterval = when (interval) {
+            "1min" -> "1m"
+            "5min" -> "5m"
+            else -> interval
         }
-        response.toDomain()
+        api.getChartData(symbol = symbol, interval = yahooInterval, range = "1d").toDomain()
     }
 
+    override suspend fun getYahooChartData(
+        symbol: String,
+        interval: String,
+        range: String,
+    ): ApiResult<List<HistoricalDataPoint>> = safeApiCall {
+        api.getChartData(symbol = symbol, interval = interval, range = range).toDomain()
+    }
 
     override suspend fun getCorporateAnnouncements(symbol: String): ApiResult<List<NewsItem>> =
         safeApiCall {
             emptyList()
         }
 }
+
+

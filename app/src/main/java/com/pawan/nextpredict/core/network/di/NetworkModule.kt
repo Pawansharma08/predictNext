@@ -44,10 +44,14 @@ object NetworkModule {
     @Provides
     @Singleton
     fun provideOkHttpClient(
-        apiKeyInterceptor: AlphaVantageApiKeyInterceptor,
         loggingInterceptor: HttpLoggingInterceptor,
     ): OkHttpClient = OkHttpClient.Builder()
-        .addInterceptor(apiKeyInterceptor)
+        .addInterceptor { chain ->
+            val request = chain.request().newBuilder()
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                .build()
+            chain.proceed(request)
+        }
         .addInterceptor(loggingInterceptor)
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
@@ -55,16 +59,18 @@ object NetworkModule {
         .retryOnConnectionFailure(true)
         .build()
 
+
     @Provides
     @Singleton
     fun provideRetrofit(
         okHttpClient: OkHttpClient,
         json: Json,
     ): Retrofit = Retrofit.Builder()
-        .baseUrl(BuildConfig.ALPHA_VANTAGE_BASE_URL + "/")
+        .baseUrl("https://query1.finance.yahoo.com/")
         .client(okHttpClient)
         .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
         .build()
+
 
     // ─── Grok (xAI) client ────────────────────────────────────────────────
 

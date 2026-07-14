@@ -39,8 +39,14 @@ interface StockRepository {
         symbol: String,
         interval: String = "1min",
     ): ApiResult<List<HistoricalDataPoint>>
+    suspend fun getYahooChartData(
+        symbol: String,
+        interval: String,
+        range: String,
+    ): ApiResult<List<HistoricalDataPoint>>
     suspend fun getCorporateAnnouncements(symbol: String): ApiResult<List<NewsItem>>
 }
+
 
 /**
  * Repository interface for stock search.

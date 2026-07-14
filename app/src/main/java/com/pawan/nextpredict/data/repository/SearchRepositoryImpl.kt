@@ -4,7 +4,7 @@ import com.pawan.nextpredict.core.common.ApiResult
 import com.pawan.nextpredict.core.common.safeApiCall
 import com.pawan.nextpredict.core.database.dao.SearchHistoryDao
 import com.pawan.nextpredict.core.database.entity.SearchHistoryEntity
-import com.pawan.nextpredict.data.remote.api.AlphaVantageApi
+import com.pawan.nextpredict.data.remote.api.YahooFinanceApi
 import com.pawan.nextpredict.data.remote.mapper.toDomain
 import com.pawan.nextpredict.domain.model.SearchResult
 import com.pawan.nextpredict.domain.repository.SearchRepository
@@ -15,7 +15,7 @@ import javax.inject.Singleton
 
 @Singleton
 class SearchRepositoryImpl @Inject constructor(
-    private val api: AlphaVantageApi,
+    private val api: YahooFinanceApi,
     private val dao: SearchHistoryDao,
 ) : SearchRepository {
 
@@ -23,6 +23,7 @@ class SearchRepositoryImpl @Inject constructor(
         if (query.isBlank()) return@safeApiCall emptyList()
         api.searchStocks(query).toDomain()
     }
+
 
     override fun getSearchHistory(): Flow<List<SearchResult>> =
         dao.getSearchHistory().map { list ->
