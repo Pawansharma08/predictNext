@@ -35,6 +35,11 @@ sealed class Screen(val route: String) {
         const val ARG_INDEX_NAME = "indexName"
     }
 
+    data object FullScreenChart : Screen("full_screen_chart/{symbol}") {
+        fun createRoute(symbol: String) = "full_screen_chart/$symbol"
+        const val ARG_SYMBOL = "symbol"
+    }
+
     // ─── Other Screens ────────────────────────────────────────────────────────
     data object News : Screen("news")
     data object Alerts : Screen("alerts")

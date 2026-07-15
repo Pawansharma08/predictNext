@@ -17,6 +17,7 @@ import com.pawan.nextpredict.feature.search.presentation.SearchScreen
 import com.pawan.nextpredict.feature.settings.presentation.SettingsScreen
 import com.pawan.nextpredict.feature.stockdetail.presentation.StockDetailScreen
 import com.pawan.nextpredict.feature.stockdetail.presentation.OptionChainScreen
+import com.pawan.nextpredict.feature.stockdetail.presentation.FullScreenChartScreen
 import com.pawan.nextpredict.feature.watchlist.presentation.WatchlistScreen
 
 @Composable
@@ -105,6 +106,22 @@ fun AppNavGraph(
                 onOptionChainClick = {
                     navController.navigate(Screen.OptionChain.createRoute(symbol))
                 },
+                onFullScreenChartClick = {
+                    navController.navigate(Screen.FullScreenChart.createRoute(symbol))
+                }
+            )
+        }
+
+        composable(
+            route = Screen.FullScreenChart.route,
+            arguments = listOf(
+                navArgument(Screen.FullScreenChart.ARG_SYMBOL) { type = NavType.StringType }
+            ),
+        ) { backStackEntry ->
+            val symbol = backStackEntry.arguments?.getString(Screen.FullScreenChart.ARG_SYMBOL) ?: ""
+            FullScreenChartScreen(
+                symbol = symbol,
+                onBack = { navController.popBackStack() }
             )
         }
 

@@ -31,7 +31,7 @@ data class StockDetailUiState(
     val error: AppException? = null,
     val isInWatchlist: Boolean = false,
     val isRefreshing: Boolean = false,
-    val selectedChartPeriod: ChartPeriod = ChartPeriod.ONE_DAY,
+    val selectedChartPeriod: ChartPeriod = ChartPeriod.FIVE_MINUTES,
     val chartPoints: List<HistoricalDataPoint> = emptyList(),
     val isChartLoading: Boolean = false,
     // Live data indicator
@@ -44,7 +44,8 @@ data class StockDetailUiState(
 )
 
 enum class ChartPeriod(val label: String, val days: Int) {
-    ONE_DAY("1D", 1),
+    FIVE_MINUTES("5m", 1),
+    ONE_HOUR("1hr", 7),
     ONE_WEEK("1W", 7),
     ONE_MONTH("1M", 30),
     THREE_MONTHS("3M", 90),
@@ -114,8 +115,23 @@ class StockDetailViewModel @Inject constructor(
     private fun startPolling(symbol: String) {
         pollingJob?.cancel()
         pollingJob = viewModelScope.launch {
+            var secondsPassed = 0
             while (true) {
                 delay(AUTO_REFRESH_INTERVAL_MS)
+                secondsPassed += (AUTO_REFRESH_INTERVAL_MS / 1000).toInt()
+
+                val currentPeriod = _uiState.value.selectedChartPeriod
+                val shouldRefreshChart = when (currentPeriod) {
+                    ChartPeriod.FIVE_MINUTES -> secondsPassed >= 30
+                    ChartPeriod.ONE_HOUR -> secondsPassed >= 60
+                    else -> false
+                }
+
+                if (shouldRefreshChart) {
+                    secondsPassed = 0
+                    loadChartData(symbol, currentPeriod, isSilent = true)
+                }
+
                 fetchQuoteAndChart(symbol, isInitialLoad = false)
             }
         }
@@ -179,18 +195,21 @@ class StockDetailViewModel @Inject constructor(
     /** Caches daily history points to avoid redundant network calls during prediction. */
     private var cachedDailyHistory: List<HistoricalDataPoint> = emptyList()
 
-    private fun loadChartData(symbol: String, period: ChartPeriod) {
-        _uiState.update { it.copy(isChartLoading = true) }
+    private fun loadChartData(symbol: String, period: ChartPeriod, isSilent: Boolean = false) {
+        if (!isSilent) {
+            _uiState.update { it.copy(isChartLoading = true) }
+        }
         
         // Define interval and range based on selected period
         val (yahooInterval, yahooRange) = when (period) {
-            ChartPeriod.ONE_DAY -> Pair("5m", "1d")         // 5-minute candles over last 1 day
-            ChartPeriod.ONE_WEEK -> Pair("15m", "5d")       // 15-minute candles over last 5 days
-            ChartPeriod.ONE_MONTH -> Pair("1d", "1mo")      // Daily candles over last 1 month
-            ChartPeriod.THREE_MONTHS -> Pair("1d", "3mo")   // Daily candles over last 3 months
-            ChartPeriod.SIX_MONTHS -> Pair("1d", "6mo")     // Daily candles over last 6 months
-            ChartPeriod.ONE_YEAR -> Pair("1d", "1y")        // Daily candles over last 1 year
-            ChartPeriod.FIVE_YEARS -> Pair("1d", "5y")      // Daily candles over last 5 years
+            ChartPeriod.FIVE_MINUTES -> Pair("5m", "1d")
+            ChartPeriod.ONE_HOUR -> Pair("1h", "1wk")
+            ChartPeriod.ONE_WEEK -> Pair("15m", "5d")
+            ChartPeriod.ONE_MONTH -> Pair("1d", "1mo")
+            ChartPeriod.THREE_MONTHS -> Pair("1d", "3mo")
+            ChartPeriod.SIX_MONTHS -> Pair("1d", "6mo")
+            ChartPeriod.ONE_YEAR -> Pair("1d", "1y")
+            ChartPeriod.FIVE_YEARS -> Pair("1d", "5y")
         }
 
         viewModelScope.launch {
@@ -204,7 +223,9 @@ class StockDetailViewModel @Inject constructor(
                     _uiState.update { it.copy(isChartLoading = false, chartPoints = result.data) }
                 }
                 else -> {
-                    _uiState.update { it.copy(isChartLoading = false, chartPoints = emptyList()) }
+                    if (!isSilent) {
+                        _uiState.update { it.copy(isChartLoading = false, chartPoints = emptyList()) }
+                    }
                 }
             }
         }
@@ -220,7 +241,7 @@ class StockDetailViewModel @Inject constructor(
 
     fun selectChartPeriod(period: ChartPeriod) {
         _uiState.update { it.copy(selectedChartPeriod = period) }
-        loadChartData(_uiState.value.symbol, period)
+        loadChartData(_uiState.value.symbol, period, isSilent = false)
     }
 
     fun toggleWatchlist() {

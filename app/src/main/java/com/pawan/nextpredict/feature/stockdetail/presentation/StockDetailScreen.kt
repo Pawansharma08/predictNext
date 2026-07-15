@@ -25,6 +25,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.ui.layout.onSizeChanged
 import com.pawan.nextpredict.core.designsystem.component.*
 import com.pawan.nextpredict.core.designsystem.theme.extendedColors
 import com.pawan.nextpredict.core.util.isGain
@@ -41,6 +44,7 @@ fun StockDetailScreen(
     symbol: String,
     onBack: () -> Unit,
     onOptionChainClick: () -> Unit,
+    onFullScreenChartClick: () -> Unit,
     viewModel: StockDetailViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -102,6 +106,7 @@ fun StockDetailScreen(
                             isPredicting = uiState.isPredicting,
                             predictionError = uiState.predictionError,
                             onPredictClick = viewModel::requestPrediction,
+                            onFullScreenChartClick = onFullScreenChartClick,
                         )
                     }
                 }
@@ -165,10 +170,13 @@ private fun StockDetailContent(
     isPredicting: Boolean,
     predictionError: String?,
     onPredictClick: () -> Unit,
+    onFullScreenChartClick: () -> Unit,
 ) {
     val isGain = quote.change.isGain()
     val priceColor = if (isGain) MaterialTheme.extendedColors.gainColor
     else MaterialTheme.extendedColors.lossColor
+
+    var selectedCandleIdx by remember(selectedPeriod) { mutableStateOf<Int?>(null) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -280,41 +288,95 @@ private fun StockDetailContent(
 
         // Chart Area
         item {
-            Card(
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(240.dp)
+                    .height(340.dp)
                     .padding(horizontal = 16.dp, vertical = 8.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                ),
-                shape = MaterialTheme.shapes.medium,
+                contentAlignment = Alignment.Center
             ) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (isChartLoading) {
-                        CircularProgressIndicator(
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(36.dp)
-                        )
-                    } else if (chartPoints.isEmpty()) {
-                        Text(
-                            text = "No chart data available",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        CandlestickChart(
-                            points         = chartPoints,
-                            predictionLow  = prediction?.targetLow,
-                            predictionHigh = prediction?.targetHigh,
-                            direction      = prediction?.direction,
+                if (isChartLoading) {
+                    CircularProgressIndicator(
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(36.dp)
+                    )
+                } else if (chartPoints.isEmpty()) {
+                    Text(
+                        text = "No chart data available",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    val displayIdx = (selectedCandleIdx ?: chartPoints.lastIndex).coerceIn(0, chartPoints.lastIndex)
+                    val displayCandle = chartPoints.getOrNull(displayIdx)
+                    val displayDateStr = displayCandle?.let {
+                        formatCandleTimestamp(it.date, selectedPeriod)
+                    } ?: ""
+
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        if (displayCandle != null) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = displayDateStr,
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OhlcItem(label = "O", value = displayCandle.open)
+                                    OhlcItem(label = "H", value = displayCandle.high)
+                                    OhlcItem(label = "L", value = displayCandle.low)
+                                    OhlcItem(label = "C", value = displayCandle.close)
+                                }
+                            }
+                            HorizontalDivider(
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                                thickness = 1.dp,
+                                modifier = Modifier.padding(vertical = 4.dp)
+                            )
+                        }
+                        
+                        Box(
                             modifier = Modifier
-                                .fillMaxSize()
-                                .padding(horizontal = 8.dp, vertical = 12.dp)
-                        )
+                                .fillMaxWidth()
+                                .weight(1f)
+                        ) {
+                            CandlestickChart(
+                                points         = chartPoints,
+                                selectedPeriod = selectedPeriod,
+                                predictionLow  = prediction?.targetLow,
+                                predictionHigh = prediction?.targetHigh,
+                                direction      = prediction?.direction,
+                                selectedCandleIdx = selectedCandleIdx,
+                                onSelectedCandleIdxChanged = { selectedCandleIdx = it },
+                                showAxes       = false,
+                                modifier       = Modifier.fillMaxSize()
+                            )
+                            
+                            IconButton(
+                                onClick = onFullScreenChartClick,
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(8.dp)
+                                    .size(36.dp)
+                                    .background(
+                                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
+                                        shape = MaterialTheme.shapes.small
+                                    )
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.OpenInFull,
+                                    contentDescription = "Expand Fullscreen",
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -356,8 +418,9 @@ private fun ChartPeriodSelector(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         ChartPeriod.values().forEach { period ->
             val isSelected = period == selectedPeriod
@@ -369,8 +432,7 @@ private fun ChartPeriodSelector(
                         text = period.label,
                         style = MaterialTheme.typography.labelSmall,
                     )
-                },
-                modifier = Modifier.weight(1f),
+                }
             )
         }
     }
@@ -494,62 +556,158 @@ private fun CircuitLimitsSection(quote: StockQuote) {
         }
     }
 }@Composable
-private fun CandlestickChart(
+fun CandlestickChart(
     points: List<com.pawan.nextpredict.domain.model.HistoricalDataPoint>,
+    selectedPeriod: ChartPeriod,
     predictionLow: Double? = null,
     predictionHigh: Double? = null,
     direction: PredictionDirection? = null,
+    selectedCandleIdx: Int? = null,
+    onSelectedCandleIdxChanged: (Int?) -> Unit,
+    showAxes: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     if (points.isEmpty()) return
+
+    val animProgress = remember { Animatable(0f) }
+    LaunchedEffect(selectedPeriod) {
+        animProgress.snapTo(0f)
+        animProgress.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(durationMillis = 800, easing = FastOutSlowInEasing)
+        )
+    }
+
+    val density = androidx.compose.ui.platform.LocalDensity.current
+
+    // Zoom and pan states
+    val minSlotWidth = with(density) { 4.dp.toPx() }
+    val maxSlotWidth = with(density) { 60.dp.toPx() }
+    var slotWidth by remember { mutableStateOf(with(density) { 15.dp.toPx() }) }
+    var scrollOffset by remember { mutableStateOf(0f) }
+    var canvasWidth by remember { mutableStateOf(0f) }
+
+    // Reset scrollOffset when points or canvas size changes
+    LaunchedEffect(points, canvasWidth, showAxes) {
+        if (canvasWidth > 0f && points.isNotEmpty()) {
+            val paddingRight = if (showAxes) 100f else 0f
+            val chartW = canvasWidth - paddingRight
+            val totalWidth = points.size * slotWidth
+            scrollOffset = (totalWidth - chartW).coerceAtLeast(0f)
+        }
+    }
+
+    // Determine the visible points based on slotWidth and scrollOffset
+    val visiblePoints = remember(points, scrollOffset, slotWidth, canvasWidth, showAxes) {
+        val paddingRight = if (showAxes) 100f else 0f
+        val chartW = canvasWidth - paddingRight
+        if (chartW <= 0f || points.isEmpty()) {
+            points
+        } else {
+            val firstVisibleIdx = (scrollOffset / slotWidth).toInt().coerceIn(0, points.lastIndex)
+            val lastVisibleIdx = ((scrollOffset + chartW) / slotWidth).toInt().coerceIn(0, points.lastIndex)
+            points.subList(firstVisibleIdx, lastVisibleIdx + 1)
+        }
+    }
 
     val gainColor  = MaterialTheme.extendedColors.gainColor
     val lossColor  = MaterialTheme.extendedColors.lossColor
     val gridColor  = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
     val textColor  = MaterialTheme.colorScheme.onSurface
+    val primaryColor = MaterialTheme.colorScheme.primary
 
-    // Expand price range to include ONLY the target line that we will draw
-    val allPrices = buildList {
-        points.forEach { add(it.high); add(it.low) }
-        if (direction == PredictionDirection.DOWN) {
-            predictionLow?.let { add(it) }
-        }
-        if (direction == PredictionDirection.UP) {
-            predictionHigh?.let { add(it) }
+    // Calculate price bounds for visible points to implement "Auto Adjust" scaling
+    val allPrices = remember(visiblePoints, direction, predictionLow, predictionHigh) {
+        buildList {
+            visiblePoints.forEach { add(it.high); add(it.low) }
+            if (direction == PredictionDirection.DOWN) {
+                predictionLow?.let { add(it) }
+            }
+            if (direction == PredictionDirection.UP) {
+                predictionHigh?.let { add(it) }
+            }
         }
     }
     val maxPrice   = allPrices.maxOrNull() ?: 1.0
     val minPrice   = allPrices.minOrNull() ?: 0.0
     val priceRange = (maxPrice - minPrice).takeIf { it > 0 } ?: 1.0
 
-    val density = androidx.compose.ui.platform.LocalDensity.current
+    Canvas(
+        modifier = modifier
+            .onSizeChanged { size ->
+                canvasWidth = size.width.toFloat()
+            }
+            .pointerInput(points, showAxes) {
+                detectTransformGestures { centroid, pan, zoomAmount, _ ->
+                    val oldSlotWidth = slotWidth
+                    slotWidth = (slotWidth * zoomAmount).coerceIn(minSlotWidth, maxSlotWidth)
+                    val scale = slotWidth / oldSlotWidth
+                    
+                    val paddingRight = if (showAxes) 100f else 0f
+                    val chartW = canvasWidth - paddingRight
+                    val maxScroll = (points.size * slotWidth - chartW).coerceAtLeast(0f)
+                    
+                    // Centering zoom on gesture centroid
+                    scrollOffset = ((scrollOffset + centroid.x) * scale - centroid.x).coerceIn(0f, maxScroll)
+                    // Apply drag pan
+                    scrollOffset = (scrollOffset - pan.x).coerceIn(0f, maxScroll)
 
-    Canvas(modifier = modifier) {
+                    // Track selected candle during gestures
+                    val touchIdx = ((scrollOffset + centroid.x) / slotWidth).toInt().coerceIn(0, points.lastIndex)
+                    onSelectedCandleIdxChanged(touchIdx)
+                }
+            }
+    ) {
         val w = size.width
         val h = size.height
 
-        val candleCount = points.size
-        val slotWidth   = w / candleCount
+        val paddingRight = if (showAxes) 100f else 0f
+        val paddingBottom = if (showAxes) 50f else 0f
+        val chartW = w - paddingRight
+        val chartH = h - paddingBottom
+
         val candleWidth = (slotWidth * 0.6f).coerceAtLeast(2f)
         val wickWidth   = (slotWidth * 0.08f).coerceAtLeast(1f)
 
         fun priceToY(price: Double): Float =
-            (h * (1.0 - (price - minPrice) / priceRange)).toFloat()
+            (chartH * (1.0 - (price - minPrice) / priceRange)).toFloat()
 
-        // ── Grid lines ───────────────────────────────────────────────────────
+        // ── Grid lines & Y-axis labels ───────────────────────────────────────
+        val textPaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.argb(120, 255, 255, 255) // light gray text
+            textSize = 9.dp.toPx()
+            textAlign = android.graphics.Paint.Align.RIGHT
+            isAntiAlias = true
+        }
+
         repeat(4) { i ->
-            val y = h * i / 3f
+            val y = chartH * i / 3f
             drawLine(
                 color = gridColor,
                 start = Offset(0f, y),
-                end   = Offset(w, y),
+                end   = Offset(chartW, y),
                 strokeWidth = 1.dp.toPx(),
             )
+
+            if (showAxes) {
+                val priceAtGrid = maxPrice - (i / 3f) * priceRange
+                drawContext.canvas.nativeCanvas.drawText(
+                    "₹${"%.2f".format(priceAtGrid)}",
+                    w - 10f,
+                    y + 12f,
+                    textPaint
+                )
+            }
         }
 
+        // Calculate indices of visible candles
+        val firstVisibleIdx = (scrollOffset / slotWidth).toInt().coerceIn(0, points.lastIndex)
+        val lastVisibleIdx = ((scrollOffset + chartW) / slotWidth).toInt().coerceIn(0, points.lastIndex)
+
         // ── Candles ──────────────────────────────────────────────────────────
-        points.forEachIndexed { idx, candle ->
-            val centerX = slotWidth * idx + slotWidth / 2f
+        for (idx in firstVisibleIdx..lastVisibleIdx) {
+            val candle = points[idx]
+            val centerX = slotWidth * idx + slotWidth / 2f - scrollOffset
             val isBull  = candle.close >= candle.open
             val color   = if (isBull) gainColor else lossColor
 
@@ -558,17 +716,21 @@ private fun CandlestickChart(
             val openY  = priceToY(candle.open)
             val closeY = priceToY(candle.close)
 
+            val animatedCloseY = openY + (closeY - openY) * animProgress.value
+            val animatedHighY  = openY + (highY - openY) * animProgress.value
+            val animatedLowY   = openY + (lowY - openY) * animProgress.value
+
             // Wick
             drawLine(
                 color = color,
-                start = Offset(centerX, highY),
-                end   = Offset(centerX, lowY),
+                start = Offset(centerX, animatedHighY),
+                end   = Offset(centerX, animatedLowY),
                 strokeWidth = wickWidth,
             )
 
             // Body
-            val bodyTop    = minOf(openY, closeY)
-            val bodyBottom = maxOf(openY, closeY)
+            val bodyTop    = minOf(openY, animatedCloseY)
+            val bodyBottom = maxOf(openY, animatedCloseY)
             val bodyHeight = (bodyBottom - bodyTop).coerceAtLeast(2f)
             drawRect(
                 color   = color,
@@ -594,11 +756,11 @@ private fun CandlestickChart(
 
             fun drawDashedHLine(yPos: Float, color: androidx.compose.ui.graphics.Color) {
                 var x = 0f
-                while (x < w - labelPad * 8) {
+                while (x < chartW - labelPad * 8) {
                     drawLine(
                         color = color,
                         start = Offset(x, yPos),
-                        end   = Offset((x + dashLen).coerceAtMost(w - labelPad * 8), yPos),
+                        end   = Offset((x + dashLen).coerceAtMost(chartW - labelPad * 8), yPos),
                         strokeWidth = lineWidth,
                     )
                     x += dashLen + gapLen
@@ -616,7 +778,7 @@ private fun CandlestickChart(
                         (gainColor.green * 255).toInt(),
                         (gainColor.blue * 255).toInt(),
                     )
-                    drawText("Target High: H ₹${"%.1f".format(predictionHigh)}", w - labelPad * 26, yHigh - labelPad, paint)
+                    drawText("Target High: H ₹${"%.1f".format(predictionHigh)}", chartW - labelPad * 26, yHigh - labelPad, paint)
                 }
             }
 
@@ -630,7 +792,96 @@ private fun CandlestickChart(
                         (lossColor.green * 255).toInt(),
                         (lossColor.blue * 255).toInt(),
                     )
-                    drawText("Target Low: L ₹${"%.1f".format(predictionLow)}", w - labelPad * 26, yLow + labelPad * 3, paint)
+                    drawText("Target Low: L ₹${"%.1f".format(predictionLow)}", chartW - labelPad * 26, yLow + labelPad * 3, paint)
+                }
+            }
+        }
+
+        // ── Crosshair line ───────────────────────────────────────────────────
+        selectedCandleIdx?.let { idx ->
+            if (idx in firstVisibleIdx..lastVisibleIdx) {
+                val centerX = slotWidth * idx + slotWidth / 2f - scrollOffset
+                // Vertical crosshair line (dashed)
+                drawLine(
+                    color = primaryColor.copy(alpha = 0.4f),
+                    start = Offset(centerX, 0f),
+                    end   = Offset(centerX, chartH),
+                    strokeWidth = 1.5.dp.toPx(),
+                    pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(
+                        floatArrayOf(10f, 10f), 0f
+                    )
+                )
+                
+                // Highlight circle at closing price of the selected candle
+                val candle = points[idx]
+                val closeY = priceToY(candle.close)
+                drawCircle(
+                    color = primaryColor,
+                    radius = 5.dp.toPx(),
+                    center = Offset(centerX, closeY)
+                )
+            }
+        }
+
+        // ── Red Live Price Tag (when showAxes is true) ────────────────────────
+        if (showAxes && points.isNotEmpty()) {
+            val currentPrice = points.last().close
+            val yCurrent = priceToY(currentPrice)
+            if (yCurrent in 0f..chartH) {
+                // Red horizontal line
+                drawLine(
+                    color = androidx.compose.ui.graphics.Color.Red,
+                    start = Offset(0f, yCurrent),
+                    end   = Offset(chartW, yCurrent),
+                    strokeWidth = 1.5.dp.toPx()
+                )
+
+                // Draw red box tag on right axis
+                val tagW = 75f
+                val tagH = 30f
+                drawRect(
+                    color = androidx.compose.ui.graphics.Color.Red,
+                    topLeft = Offset(chartW + 5f, yCurrent - tagH / 2f),
+                    size = Size(tagW, tagH)
+                )
+
+                val tagTextPaint = android.graphics.Paint().apply {
+                    color = android.graphics.Color.WHITE
+                    textSize = 9.dp.toPx()
+                    textAlign = android.graphics.Paint.Align.CENTER
+                    isFakeBoldText = true
+                    isAntiAlias = true
+                }
+                drawContext.canvas.nativeCanvas.drawText(
+                    "%.2f".format(currentPrice),
+                    chartW + 5f + tagW / 2f,
+                    yCurrent + 10f,
+                    tagTextPaint
+                )
+            }
+        }
+
+        // ── X-axis date/time labels ──────────────────────────────────────────
+        if (showAxes && points.isNotEmpty()) {
+            val labelPaint = android.graphics.Paint().apply {
+                color = android.graphics.Color.argb(120, 255, 255, 255)
+                textSize = 9.dp.toPx()
+                textAlign = android.graphics.Paint.Align.CENTER
+                isAntiAlias = true
+            }
+
+            val step = ((lastVisibleIdx - firstVisibleIdx) / 3).coerceAtLeast(5)
+            for (idx in firstVisibleIdx..lastVisibleIdx step step) {
+                val candle = points.getOrNull(idx) ?: continue
+                val centerX = slotWidth * idx + slotWidth / 2f - scrollOffset
+                if (centerX in 0f..chartW) {
+                    val label = formatCandleTimestamp(candle.date, selectedPeriod)
+                    drawContext.canvas.nativeCanvas.drawText(
+                        label,
+                        centerX,
+                        h - 10f,
+                        labelPaint
+                    )
                 }
             }
         }
@@ -790,145 +1041,116 @@ private fun PredictionCard(prediction: PricePrediction) {
     val (directionIcon, directionLabel, cardColor) = when (prediction.direction) {
         PredictionDirection.UP -> Triple(
             Icons.Default.TrendingUp,
-            "BULLISH ↑",
+            "HIGH ↑",
             MaterialTheme.extendedColors.gainColor,
         )
         PredictionDirection.DOWN -> Triple(
             Icons.Default.TrendingDown,
-            "BEARISH ↓",
+            "LOW ↓",
             MaterialTheme.extendedColors.lossColor,
         )
         PredictionDirection.SIDEWAYS -> Triple(
             Icons.Default.TrendingFlat,
-            "NEUTRAL →",
+            "SIDEWAYS →",
             MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
+
+    val predictedPrice = (prediction.targetLow + prediction.targetHigh) / 2.0
 
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
             containerColor = cardColor.copy(alpha = 0.08f),
         ),
-        shape = MaterialTheme.shapes.large,
+        shape = MaterialTheme.shapes.medium,
         border = androidx.compose.foundation.BorderStroke(
             width = 1.dp,
             color = cardColor.copy(alpha = 0.3f),
         ),
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-
-            // Direction header row
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        imageVector = directionIcon,
-                        contentDescription = null,
-                        tint = cardColor,
-                        modifier = Modifier.size(28.dp),
-                    )
-                    Text(
-                        text = directionLabel,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                        color = cardColor,
-                    )
-                }
-                // Grok badge
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    shape = MaterialTheme.shapes.small,
-                ) {
-                    Text(
-                        text = "⚡ Grok AI",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                    )
-                }
+                Icon(
+                    imageVector = directionIcon,
+                    contentDescription = null,
+                    tint = cardColor,
+                    modifier = Modifier.size(24.dp),
+                )
+                Text(
+                    text = "Direction: $directionLabel",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = cardColor,
+                )
             }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Price range
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Column {
-                    Text(
-                        text = "Target Low",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        text = prediction.targetLow.toPriceString(),
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-                        color = MaterialTheme.extendedColors.lossColor,
-                    )
-                }
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = "Confidence",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        text = "${prediction.confidence}%",
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                        color = cardColor,
-                    )
-                }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(
-                        text = "Target High",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        text = prediction.targetHigh.toPriceString(),
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-                        color = MaterialTheme.extendedColors.gainColor,
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Confidence bar
-            LinearProgressIndicator(
-                progress = { prediction.confidence / 100f },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(6.dp)
-                    .clip(MaterialTheme.shapes.small),
-                color = cardColor,
-                trackColor = cardColor.copy(alpha = 0.15f),
+            
+            Text(
+                text = "Predicted Price: ₹${"%.2f".format(predictedPrice)}",
+                style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurface,
             )
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // AI reasoning
             Text(
-                text = "💡 ${prediction.reasoning}",
-                style = MaterialTheme.typography.bodySmall,
+                text = "Target Range: ₹${"%.2f".format(prediction.targetLow)} - ₹${"%.2f".format(prediction.targetHigh)}",
+                style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
 
-            Spacer(modifier = Modifier.height(8.dp))
+@Composable
+fun OhlcItem(label: String, value: Double) {
+    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            text = "$label:",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+        )
+        Text(
+            text = "₹${"%.2f".format(value)}",
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
 
-            // Timestamp
-            Text(
-                text = "Generated at ${prediction.generatedAt}  •  For educational purposes only",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-            )
+fun formatCandleTimestamp(dateStr: String, period: ChartPeriod): String {
+    if (dateStr.length < 16) return dateStr
+    val datePart = dateStr.substring(0, 10) // "yyyy-MM-dd"
+    val timePart = dateStr.substring(11, 16) // "HH:mm"
+    
+    return when (period) {
+        ChartPeriod.FIVE_MINUTES, ChartPeriod.ONE_HOUR -> {
+            val parts = datePart.split("-")
+            if (parts.size == 3) {
+                val day = parts[2]
+                val monthNum = parts[1].toIntOrNull() ?: 1
+                val months = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+                val monthName = months.getOrElse(monthNum - 1) { "" }
+                "$day $monthName, $timePart"
+            } else {
+                timePart
+            }
+        }
+        else -> {
+            val parts = datePart.split("-")
+            if (parts.size == 3) {
+                val year = parts[0].substring(2)
+                val monthNum = parts[1].toIntOrNull() ?: 1
+                val day = parts[2]
+                val months = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+                val monthName = months.getOrElse(monthNum - 1) { "" }
+                "$day $monthName '$year"
+            } else {
+                datePart
+            }
         }
     }
 }
