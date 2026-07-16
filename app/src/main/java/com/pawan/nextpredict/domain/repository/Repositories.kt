@@ -97,8 +97,12 @@ interface AlertRepository {
 interface PredictionRepository {
     suspend fun predictNextPrice(
         symbol: String,
+        companyName: String,
         currentPrice: Double,
-        history: List<com.pawan.nextpredict.domain.model.HistoricalDataPoint>,
+        change: Double,
+        changePercent: Double,
+        intradayHistory: List<com.pawan.nextpredict.domain.model.HistoricalDataPoint>,
+        dailyHistory: List<com.pawan.nextpredict.domain.model.HistoricalDataPoint>,
         isIntraday: Boolean = false,
         fiveYearSummary: String = "",
     ): com.pawan.nextpredict.core.common.ApiResult<com.pawan.nextpredict.domain.model.PricePrediction>

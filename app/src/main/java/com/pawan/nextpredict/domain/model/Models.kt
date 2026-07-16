@@ -232,6 +232,8 @@ enum class PredictionDirection { UP, DOWN, SIDEWAYS }
 data class PricePrediction(
     val symbol: String,
     val direction: PredictionDirection,
+    /** Specific predicted price target. */
+    val targetPrice: Double,
     /** Lower bound of the predicted price range. */
     val targetLow: Double,
     /** Upper bound of the predicted price range. */
@@ -242,4 +244,6 @@ data class PricePrediction(
     val reasoning: String,
     /** ISO timestamp when the prediction was generated. */
     val generatedAt: String,
+    /** Estimated target time or timeframe when this prediction is expected to materialize. */
+    val targetTime: String,
 )

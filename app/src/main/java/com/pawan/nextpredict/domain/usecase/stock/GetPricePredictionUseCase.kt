@@ -19,6 +19,8 @@ class GetPricePredictionUseCase @Inject constructor(
 ) {
     companion object {
         const val INTRADAY_INTERVAL    = "1min"
+        /** Maximum intraday candles sent to the AI. */
+        const val INTRADAY_LIMIT       = 60
         /** Recent daily candles sent verbatim to the AI. */
         const val RECENT_CANDLES       = 100
         /** Maximum trading days in compact outputsize (100 days / ~5 months). */
@@ -29,33 +31,47 @@ class GetPricePredictionUseCase @Inject constructor(
 
     suspend operator fun invoke(
         symbol: String,
+        companyName: String,
         currentPrice: Double,
+        change: Double,
+        changePercent: Double,
         dailyHistory: List<HistoricalDataPoint>,
     ): ApiResult<PricePrediction> {
 
-        // Slice to maximum available free history from pre-fetched dailyHistory
-        val hundredDays = dailyHistory.takeLast(MAX_FREE_DAYS)
-        val midTerm     = dailyHistory.takeLast(MID_TERM_DAYS)
+        // Try to fetch daily history dynamically if the passed list is empty (robust fallback)
+        var historyPoints = dailyHistory
+        if (historyPoints.isEmpty()) {
+            val dailyResult = stockRepository.getYahooChartData(symbol, interval = "1d", range = "1y")
+            if (dailyResult is ApiResult.Success) {
+                historyPoints = dailyResult.data
+            }
+        }
+
+        // Slice to maximum available free history from historyPoints
+        val hundredDays = historyPoints.takeLast(MAX_FREE_DAYS)
+        val midTerm     = historyPoints.takeLast(MID_TERM_DAYS)
 
         // ── Step 1: Compute 100-day summary statistics ───────────────────────────
         val historySummary = buildHistorySummary(hundredDays, midTerm, currentPrice)
 
-        // ── Step 2: Try to get 1-minute intraday candles for recent momentum ─────
+        // ── Step 2: Try to get 1-minute intraday candles for today ────────────────
         val intradayResult = stockRepository.getIntradayData(symbol, INTRADAY_INTERVAL)
         val isIntraday = intradayResult is ApiResult.Success && intradayResult.data.isNotEmpty()
-
-        // Use intraday for the "recent" candles if available; else use last 30 daily
-        val recentCandles: List<HistoricalDataPoint> = if (isIntraday) {
-            (intradayResult as ApiResult.Success).data.takeLast(30)
+        val intradayCandles = if (isIntraday) {
+            (intradayResult as ApiResult.Success).data.takeLast(INTRADAY_LIMIT)
         } else {
-            hundredDays.takeLast(RECENT_CANDLES)
+            emptyList()
         }
 
         // ── Step 3: Call AI with full multi-timeframe context ─────────────────────
         return predictionRepository.predictNextPrice(
             symbol           = symbol,
+            companyName      = companyName,
             currentPrice     = currentPrice,
-            history          = recentCandles,
+            change           = change,
+            changePercent    = changePercent,
+            intradayHistory  = intradayCandles,
+            dailyHistory     = hundredDays,
             isIntraday       = isIntraday,
             fiveYearSummary  = historySummary,
         )

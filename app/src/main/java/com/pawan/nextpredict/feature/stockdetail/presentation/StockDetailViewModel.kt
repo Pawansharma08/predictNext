@@ -96,9 +96,9 @@ class StockDetailViewModel @Inject constructor(
             fetchQuoteAndChart(symbol, isInitialLoad = true)
         }
 
-        // Pre-fetch 100-day daily history in the background to cache for Grok AI predictions
+        // Pre-fetch 1-year daily history in the background to cache for Grok AI predictions
         viewModelScope.launch {
-            val dailyResult = getYahooChartDataUseCase(symbol, interval = "1d", range = "3mo")
+            val dailyResult = getYahooChartDataUseCase(symbol, interval = "1d", range = "1y")
             if (dailyResult is ApiResult.Success) {
                 cachedDailyHistory = dailyResult.data
             }
@@ -263,13 +263,21 @@ class StockDetailViewModel @Inject constructor(
 
     fun requestPrediction() {
         val state = _uiState.value
-        val currentPrice = state.quote?.lastPrice ?: return
+        val quote = state.quote ?: return
+        val currentPrice = quote.lastPrice
         val symbol = state.symbol.ifBlank { return }
 
         _uiState.update { it.copy(isPredicting = true, predictionError = null) }
 
         viewModelScope.launch {
-            when (val result = getPricePredictionUseCase(symbol, currentPrice, cachedDailyHistory)) {
+            when (val result = getPricePredictionUseCase(
+                symbol = symbol,
+                companyName = quote.companyName,
+                currentPrice = currentPrice,
+                change = quote.change,
+                changePercent = quote.changePercent,
+                dailyHistory = cachedDailyHistory
+            )) {
                 is ApiResult.Success -> _uiState.update {
                     it.copy(isPredicting = false, prediction = result.data, predictionError = null)
                 }
