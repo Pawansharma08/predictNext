@@ -92,7 +92,7 @@ interface AlertRepository {
 }
 
 /**
- * Repository interface for AI-powered price predictions via Grok.
+ * Repository interface for technical-analysis price predictions.
  */
 interface PredictionRepository {
     suspend fun predictNextPrice(

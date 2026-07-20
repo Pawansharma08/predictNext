@@ -1,0 +1,35 @@
+{
+  "vol_threshold_q2": 0.0141416433312767,
+  "vol_threshold_q3": 0.0177237213158683,
+  "vol_min": 0.0060399738021351,
+  "vol_max": 0.0774062699995605,
+  "signal_regime": "low_medium",
+  "signal_condition": "volatility <= 0.014142",
+  "pct_days_with_signal": 50.0,
+  "trained_on": "features.csv",
+  "n_training_rows": 2182,
+  "feature_cols": [
+    "rsi",
+    "macd",
+    "macd_signal",
+    "macd_hist",
+    "volatility",
+    "zscore",
+    "returns_5d",
+    "atr",
+    "bb_pct",
+    "vol_roc",
+    "vol_ratio",
+    "returns_1d",
+    "returns_3d",
+    "returns_10d"
+  ],
+  "classes": [
+    "NOT_UP",
+    "UP"
+  ],
+  "label_encoding": {
+    "NOT_UP": 0,
+    "UP": 1
+  }
+}

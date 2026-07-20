@@ -1,5 +1,6 @@
 package com.pawan.nextpredict.data.remote.di
 
+import com.pawan.nextpredict.data.remote.api.MlPredictionApi
 import com.pawan.nextpredict.data.remote.api.YahooFinanceApi
 import com.pawan.nextpredict.data.remote.api.GrokApi
 import com.pawan.nextpredict.data.repository.PredictionRepositoryImpl
@@ -33,6 +34,12 @@ abstract class ApiModule {
         @Provides
         @Singleton
         fun provideGrokApi(@Named("grok") grokRetrofit: Retrofit): GrokApi = grokRetrofit.create()
+
+        @Provides
+        @Singleton
+        fun provideMlPredictionApi(@Named("ml") mlRetrofit: Retrofit): MlPredictionApi =
+            mlRetrofit.create()
     }
 }
+
 

@@ -247,3 +247,56 @@ data class PricePrediction(
     /** Estimated target time or timeframe when this prediction is expected to materialize. */
     val targetTime: String,
 )
+
+/**
+ * Tracks the accuracy of a prediction after the target time elapses.
+ */
+data class PredictionResult(
+    /** The original prediction that was made. */
+    val prediction: PricePrediction,
+    /** Price at the moment the prediction was made. */
+    val priceAtPrediction: Double,
+    /** Actual live price after 5 minutes elapsed. */
+    val actualPrice: Double,
+    /** Difference: actualPrice - predictedPrice. */
+    val priceError: Double,
+    /** Absolute error as a percentage of priceAtPrediction. */
+    val errorPercent: Double,
+    /** Was the direction (UP/DOWN) correct? */
+    val directionCorrect: Boolean,
+    /** Did the actual price land within targetLow–targetHigh? */
+    val withinRange: Boolean,
+    /** Grade label: "Excellent", "Good", "Fair", "Off Target". */
+    val grade: String,
+)
+
+/**
+ * Signal values returned by the ML /compute-and-predict endpoint.
+ */
+enum class MlSignalDirection {
+    UP,                  // model predicts >+1% in 5 days
+    NOT_UP,              // model predicts flat or down
+    NO_RELIABLE_SIGNAL,  // high-volatility regime — model has no edge
+    INSUFFICIENT_DATA,   // not enough candles for indicator warm-up
+}
+
+/**
+ * Domain model for the secondary ML badge (LightGBM, Option B integration).
+ * Runs in parallel with the Grok prediction — displayed as a small badge.
+ */
+data class MlSignal(
+    val symbol: String,
+    val direction: MlSignalDirection,
+    /** Probability of the predicted class (null when gated). */
+    val confidence: Double?,
+    /** "low_medium" → signal active | "high" → gated | "unknown" → no data */
+    val volRegime: String,
+    /** Current 20-day rolling volatility value. */
+    val volatility: Double?,
+    /** The volatility gate threshold used. */
+    val volThreshold: Double,
+    /** Number of OHLCV candles the server received. */
+    val candlesUsed: Int,
+    /** Disclaimer / explanation note from the server. */
+    val note: String,
+)

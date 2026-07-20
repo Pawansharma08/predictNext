@@ -17,6 +17,14 @@ import java.util.concurrent.TimeUnit
 import javax.inject.Named
 import javax.inject.Singleton
 
+/**
+ * Base URL for the local LightGBM FastAPI server.
+ * - Android emulator → host machine: 10.0.2.2
+ * - Physical device on same LAN: use your PC's LAN IP instead
+ * Override via BuildConfig.ML_SERVER_URL in local.properties if needed.
+ */
+private const val ML_SERVER_URL = "http://192.168.4.104:8000/"
+
 @Module
 @InstallIn(SingletonComponent::class)
 object NetworkModule {
@@ -98,6 +106,34 @@ object NetworkModule {
     ): Retrofit = Retrofit.Builder()
         .baseUrl(BuildConfig.GROK_BASE_URL + "/")
         .client(grokOkHttpClient)
+        .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+        .build()
+
+
+    // ─── ML (LightGBM FastAPI) client ────────────────────────────────────────
+
+    @Provides
+    @Singleton
+    @Named("ml")
+    fun provideMlOkHttpClient(
+        loggingInterceptor: HttpLoggingInterceptor,
+    ): OkHttpClient = OkHttpClient.Builder()
+        .addInterceptor(loggingInterceptor)
+        .connectTimeout(10, TimeUnit.SECONDS)  // local server — should be fast
+        .readTimeout(15, TimeUnit.SECONDS)
+        .writeTimeout(10, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(false)       // fail fast if server is down
+        .build()
+
+    @Provides
+    @Singleton
+    @Named("ml")
+    fun provideMlRetrofit(
+        @Named("ml") mlOkHttpClient: OkHttpClient,
+        json: Json,
+    ): Retrofit = Retrofit.Builder()
+        .baseUrl(ML_SERVER_URL)
+        .client(mlOkHttpClient)
         .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
         .build()
 }

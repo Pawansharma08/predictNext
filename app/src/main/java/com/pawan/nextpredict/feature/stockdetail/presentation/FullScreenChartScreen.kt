@@ -215,6 +215,7 @@ fun FullScreenChartScreen(
                             selectedPeriod = uiState.selectedChartPeriod,
                             predictionLow = uiState.prediction?.targetLow,
                             predictionHigh = uiState.prediction?.targetHigh,
+                            predictionTarget = uiState.prediction?.targetPrice,
                             direction = uiState.prediction?.direction,
                             selectedCandleIdx = selectedCandleIdx,
                             onSelectedCandleIdxChanged = { selectedCandleIdx = it },

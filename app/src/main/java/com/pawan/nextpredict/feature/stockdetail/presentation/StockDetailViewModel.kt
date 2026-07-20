@@ -5,8 +5,11 @@ import androidx.lifecycle.viewModelScope
 import com.pawan.nextpredict.core.common.ApiResult
 import com.pawan.nextpredict.core.common.AppException
 import com.pawan.nextpredict.domain.model.HistoricalDataPoint
+import com.pawan.nextpredict.domain.model.PredictionDirection
+import com.pawan.nextpredict.domain.model.PredictionResult
 import com.pawan.nextpredict.domain.model.PricePrediction
 import com.pawan.nextpredict.domain.model.StockQuote
+import kotlin.math.abs
 import com.pawan.nextpredict.domain.usecase.stock.GetStockQuoteUseCase
 import com.pawan.nextpredict.domain.usecase.stock.GetHistoricalDataUseCase
 import com.pawan.nextpredict.domain.usecase.stock.GetYahooChartDataUseCase
@@ -15,8 +18,8 @@ import com.pawan.nextpredict.domain.usecase.watchlist.IsSymbolInWatchlistUseCase
 import com.pawan.nextpredict.domain.usecase.watchlist.AddStockToWatchlistUseCase
 import com.pawan.nextpredict.domain.usecase.watchlist.RemoveStockFromWatchlistUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
-
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -37,10 +40,15 @@ data class StockDetailUiState(
     // Live data indicator
     val isLive: Boolean = false,
     val lastUpdatedAt: String = "",
-    // Grok prediction state
+    // Technical analysis prediction state
     val prediction: PricePrediction? = null,
     val isPredicting: Boolean = false,
     val predictionError: String? = null,
+    // Prediction verification (after 5 min)
+    val predictionCountdownSeconds: Int = 0,
+    val isCountdownActive: Boolean = false,
+    val predictionResult: PredictionResult? = null,
+    val priceAtPrediction: Double = 0.0,
 )
 
 enum class ChartPeriod(val label: String, val days: Int) {
@@ -66,15 +74,15 @@ class StockDetailViewModel @Inject constructor(
 ) : ViewModel() {
 
     companion object {
-        /**
-         * Auto-refresh interval in milliseconds.
-         * 5 seconds = real-time feeling moving charts (no key limits with Yahoo).
-         */
         private const val AUTO_REFRESH_INTERVAL_MS = 5 * 1000L
+        private const val VERIFICATION_SECONDS = 5 * 60
     }
 
     /** Holds the coroutine that auto-polls for fresh price data. */
     private var pollingJob: Job? = null
+
+    /** Holds the countdown + verification coroutine after a prediction is made. */
+    private var verificationJob: Job? = null
 
     private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
 
@@ -96,7 +104,7 @@ class StockDetailViewModel @Inject constructor(
             fetchQuoteAndChart(symbol, isInitialLoad = true)
         }
 
-        // Pre-fetch 1-year daily history in the background to cache for Grok AI predictions
+        // Pre-fetch 1-year daily history in the background to cache for technical predictions
         viewModelScope.launch {
             val dailyResult = getYahooChartDataUseCase(symbol, interval = "1d", range = "1y")
             if (dailyResult is ApiResult.Success) {
@@ -267,19 +275,39 @@ class StockDetailViewModel @Inject constructor(
         val currentPrice = quote.lastPrice
         val symbol = state.symbol.ifBlank { return }
 
-        _uiState.update { it.copy(isPredicting = true, predictionError = null) }
+        verificationJob?.cancel()
+        _uiState.update {
+            it.copy(
+                isPredicting = true,
+                predictionError = null,
+                predictionResult = null,
+                isCountdownActive = false,
+                predictionCountdownSeconds = 0,
+            )
+        }
 
         viewModelScope.launch {
-            when (val result = getPricePredictionUseCase(
-                symbol = symbol,
-                companyName = quote.companyName,
-                currentPrice = currentPrice,
-                change = quote.change,
+            val result = getPricePredictionUseCase(
+                symbol        = symbol,
+                companyName   = quote.companyName,
+                currentPrice  = currentPrice,
+                change        = quote.change,
                 changePercent = quote.changePercent,
-                dailyHistory = cachedDailyHistory
-            )) {
-                is ApiResult.Success -> _uiState.update {
-                    it.copy(isPredicting = false, prediction = result.data, predictionError = null)
+                dailyHistory  = cachedDailyHistory,
+            )
+
+            when (result) {
+                is ApiResult.Success -> {
+                    _uiState.update {
+                        it.copy(
+                            isPredicting = false,
+                            prediction = result.data,
+                            predictionError = null,
+                            priceAtPrediction = currentPrice,
+                            predictionResult = null,
+                        )
+                    }
+                    startVerificationCountdown(symbol, result.data, currentPrice)
                 }
                 is ApiResult.Error -> _uiState.update {
                     it.copy(
@@ -292,8 +320,76 @@ class StockDetailViewModel @Inject constructor(
         }
     }
 
+    private fun startVerificationCountdown(
+        symbol: String,
+        prediction: PricePrediction,
+        priceAtPrediction: Double,
+    ) {
+        verificationJob?.cancel()
+        verificationJob = viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    isCountdownActive = true,
+                    predictionCountdownSeconds = VERIFICATION_SECONDS,
+                    predictionResult = null,
+                )
+            }
+
+            // Tick every second
+            for (remaining in VERIFICATION_SECONDS - 1 downTo 0) {
+                delay(1_000L)
+                _uiState.update { it.copy(predictionCountdownSeconds = remaining) }
+            }
+
+            // Time's up — fetch the actual price
+            _uiState.update { it.copy(isCountdownActive = false) }
+
+            val quoteResult = getStockQuoteUseCase(symbol)
+            if (quoteResult is ApiResult.Success) {
+                val actualPrice = quoteResult.data.lastPrice
+                val priceError = actualPrice - prediction.targetPrice
+                val errorPct = if (priceAtPrediction != 0.0) {
+                    abs(actualPrice - prediction.targetPrice) / priceAtPrediction * 100.0
+                } else 0.0
+
+                val actualDirection = when {
+                    actualPrice > priceAtPrediction + 0.01 -> PredictionDirection.UP
+                    actualPrice < priceAtPrediction - 0.01 -> PredictionDirection.DOWN
+                    else -> PredictionDirection.SIDEWAYS
+                }
+                val directionCorrect = prediction.direction == actualDirection ||
+                    (prediction.direction == PredictionDirection.SIDEWAYS && abs(actualPrice - priceAtPrediction) < priceAtPrediction * 0.001)
+                val withinRange = actualPrice in prediction.targetLow..prediction.targetHigh
+
+                val grade = when {
+                    withinRange && directionCorrect -> "Excellent"
+                    directionCorrect && errorPct < 0.15 -> "Good"
+                    directionCorrect -> "Fair"
+                    errorPct < 0.1 -> "Fair"
+                    else -> "Off Target"
+                }
+
+                _uiState.update {
+                    it.copy(
+                        predictionResult = PredictionResult(
+                            prediction = prediction,
+                            priceAtPrediction = priceAtPrediction,
+                            actualPrice = actualPrice,
+                            priceError = priceError,
+                            errorPercent = errorPct,
+                            directionCorrect = directionCorrect,
+                            withinRange = withinRange,
+                            grade = grade,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         pollingJob?.cancel()
+        verificationJob?.cancel()
     }
 }

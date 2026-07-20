@@ -35,6 +35,7 @@ import com.pawan.nextpredict.core.util.toChangePercentString
 import com.pawan.nextpredict.core.util.toChangeString
 import com.pawan.nextpredict.core.util.toPriceString
 import com.pawan.nextpredict.core.util.toVolumeString
+import com.pawan.nextpredict.domain.model.PredictionResult
 import com.pawan.nextpredict.domain.model.PricePrediction
 import com.pawan.nextpredict.domain.model.PredictionDirection
 import com.pawan.nextpredict.domain.model.StockQuote
@@ -105,6 +106,9 @@ fun StockDetailScreen(
                             prediction = uiState.prediction,
                             isPredicting = uiState.isPredicting,
                             predictionError = uiState.predictionError,
+                            countdownSeconds = uiState.predictionCountdownSeconds,
+                            isCountdownActive = uiState.isCountdownActive,
+                            predictionResult = uiState.predictionResult,
                             onPredictClick = viewModel::requestPrediction,
                             onFullScreenChartClick = onFullScreenChartClick,
                         )
@@ -169,6 +173,9 @@ private fun StockDetailContent(
     prediction: PricePrediction?,
     isPredicting: Boolean,
     predictionError: String?,
+    countdownSeconds: Int,
+    isCountdownActive: Boolean,
+    predictionResult: PredictionResult?,
     onPredictClick: () -> Unit,
     onFullScreenChartClick: () -> Unit,
 ) {
@@ -351,6 +358,7 @@ private fun StockDetailContent(
                                 selectedPeriod = selectedPeriod,
                                 predictionLow  = prediction?.targetLow,
                                 predictionHigh = prediction?.targetHigh,
+                                predictionTarget = prediction?.targetPrice,
                                 direction      = prediction?.direction,
                                 selectedCandleIdx = selectedCandleIdx,
                                 onSelectedCandleIdxChanged = { selectedCandleIdx = it },
@@ -398,12 +406,15 @@ private fun StockDetailContent(
         // Separator
         item { Spacer(modifier = Modifier.height(8.dp)) }
 
-        // Grok AI Prediction
+        // Technical Analysis Prediction
         item {
             PredictionSection(
                 prediction = prediction,
                 isPredicting = isPredicting,
                 predictionError = predictionError,
+                countdownSeconds = countdownSeconds,
+                isCountdownActive = isCountdownActive,
+                predictionResult = predictionResult,
                 onPredictClick = onPredictClick,
             )
         }
@@ -561,6 +572,7 @@ fun CandlestickChart(
     selectedPeriod: ChartPeriod,
     predictionLow: Double? = null,
     predictionHigh: Double? = null,
+    predictionTarget: Double? = null,
     direction: PredictionDirection? = null,
     selectedCandleIdx: Int? = null,
     onSelectedCandleIdxChanged: (Int?) -> Unit,
@@ -617,7 +629,7 @@ fun CandlestickChart(
     val primaryColor = MaterialTheme.colorScheme.primary
 
     // Calculate price bounds for visible points to implement "Auto Adjust" scaling
-    val allPrices = remember(visiblePoints, direction, predictionLow, predictionHigh) {
+    val allPrices = remember(visiblePoints, direction, predictionLow, predictionHigh, predictionTarget) {
         buildList {
             visiblePoints.forEach { add(it.high); add(it.low) }
             if (direction == PredictionDirection.DOWN) {
@@ -626,6 +638,7 @@ fun CandlestickChart(
             if (direction == PredictionDirection.UP) {
                 predictionHigh?.let { add(it) }
             }
+            predictionTarget?.let { add(it) }
         }
     }
     val maxPrice   = allPrices.maxOrNull() ?: 1.0
@@ -742,8 +755,9 @@ fun CandlestickChart(
         // ── Prediction overlay: dashed horizontal line (direction-based) ──────
         val showHigh = direction == PredictionDirection.UP && predictionHigh != null
         val showLow  = direction == PredictionDirection.DOWN && predictionLow != null
+        val showTarget = predictionTarget != null
 
-        if (showHigh || showLow) {
+        if (showHigh || showLow || showTarget) {
             val dashLen   = 12.dp.toPx()
             val gapLen    = 6.dp.toPx()
             val lineWidth = 1.5.dp.toPx()
@@ -765,6 +779,15 @@ fun CandlestickChart(
                     )
                     x += dashLen + gapLen
                 }
+            }
+
+            fun drawSolidHLine(yPos: Float, color: androidx.compose.ui.graphics.Color) {
+                drawLine(
+                    color = color,
+                    start = Offset(0f, yPos),
+                    end   = Offset(chartW - labelPad * 8, yPos),
+                    strokeWidth = lineWidth * 1.5f,
+                )
             }
 
             if (showHigh && predictionHigh != null) {
@@ -793,6 +816,21 @@ fun CandlestickChart(
                         (lossColor.blue * 255).toInt(),
                     )
                     drawText("Target Low: L ₹${"%.1f".format(predictionLow)}", chartW - labelPad * 26, yLow + labelPad * 3, paint)
+                }
+            }
+
+            if (showTarget && predictionTarget != null) {
+                val yTarget = priceToY(predictionTarget)
+                val targetColor = androidx.compose.ui.graphics.Color(0xFF2196F3) // Blue
+                drawSolidHLine(yTarget, targetColor)
+                drawContext.canvas.nativeCanvas.apply {
+                    paint.color = android.graphics.Color.argb(
+                        255,
+                        (targetColor.red * 255).toInt(),
+                        (targetColor.green * 255).toInt(),
+                        (targetColor.blue * 255).toInt(),
+                    )
+                    drawText("Predicted: ₹${"%.1f".format(predictionTarget)}", chartW - labelPad * 26, yTarget - labelPad, paint)
                 }
             }
         }
@@ -947,13 +985,16 @@ private fun InteractiveLineChart(
     }
 }
 
-// ─── Grok AI Prediction Section ──────────────────────────────────────────────
+// ─── Technical Analysis Prediction Section ───────────────────────────────────
 
 @Composable
 private fun PredictionSection(
     prediction: PricePrediction?,
     isPredicting: Boolean,
     predictionError: String?,
+    countdownSeconds: Int,
+    isCountdownActive: Boolean,
+    predictionResult: PredictionResult?,
     onPredictClick: () -> Unit,
 ) {
     Column(
@@ -964,7 +1005,7 @@ private fun PredictionSection(
     ) {
         // Section header
         Text(
-            text = "AI Price Prediction",
+            text = "5-Minute Price Prediction",
             style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
             color = MaterialTheme.colorScheme.onSurface,
         )
@@ -986,7 +1027,7 @@ private fun PredictionSection(
                     strokeWidth = 2.dp,
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Asking Grok AI…")
+                Text("Analyzing candles…")
             } else {
                 Icon(
                     imageVector = Icons.Default.AutoAwesome,
@@ -1030,6 +1071,16 @@ private fun PredictionSection(
         // Prediction result card
         if (prediction != null) {
             PredictionCard(prediction = prediction)
+        }
+
+        // Countdown timer while waiting for verification
+        if (isCountdownActive && prediction != null) {
+            CountdownTimerCard(countdownSeconds = countdownSeconds)
+        }
+
+        // Accuracy result after 5 minutes
+        if (predictionResult != null) {
+            PredictionAccuracyCard(result = predictionResult)
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -1213,7 +1264,7 @@ private fun PredictionCard(prediction: PricePrediction) {
                 modifier = Modifier.padding(vertical = 4.dp)
             )
 
-            // Grok AI Reasoning Section
+            // Technical Reasoning Section
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1245,6 +1296,351 @@ private fun PredictionCard(prediction: PricePrediction) {
                     style = MaterialTheme.typography.bodySmall.copy(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic),
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
                     lineHeight = 16.sp
+                )
+            }
+        }
+    }
+}
+
+// ─── Countdown Timer ─────────────────────────────────────────────────────────
+
+@Composable
+private fun CountdownTimerCard(countdownSeconds: Int) {
+    val minutes = countdownSeconds / 60
+    val seconds = countdownSeconds % 60
+    val progress = 1f - (countdownSeconds.toFloat() / (5 * 60))
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f),
+        ),
+        shape = MaterialTheme.shapes.medium,
+        border = androidx.compose.foundation.BorderStroke(
+            width = 1.dp,
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f),
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Timer,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Text(
+                        text = "Verifying in…",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+                Text(
+                    text = "%d:%02d".format(minutes, seconds),
+                    style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+
+            LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(3.dp)),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+            )
+
+            Text(
+                text = "Waiting for 5 minutes to compare predicted vs actual price…",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+// ─── Prediction Accuracy Result Card ─────────────────────────────────────────
+
+@Composable
+private fun PredictionAccuracyCard(result: PredictionResult) {
+    val gradeColor = when (result.grade) {
+        "Excellent" -> MaterialTheme.extendedColors.gainColor
+        "Good" -> MaterialTheme.extendedColors.gainColor
+        "Fair" -> MaterialTheme.colorScheme.tertiary
+        else -> MaterialTheme.extendedColors.lossColor
+    }
+    val gradeEmoji = when (result.grade) {
+        "Excellent" -> "🎯"
+        "Good" -> "✅"
+        "Fair" -> "🔶"
+        else -> "❌"
+    }
+    val directionEmoji = if (result.directionCorrect) "✅" else "❌"
+    val rangeEmoji = if (result.withinRange) "✅" else "❌"
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = gradeColor.copy(alpha = 0.08f),
+        ),
+        shape = MaterialTheme.shapes.medium,
+        border = androidx.compose.foundation.BorderStroke(
+            width = 1.5.dp,
+            color = gradeColor.copy(alpha = 0.4f),
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            // Header: Grade badge
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Assessment,
+                        contentDescription = null,
+                        tint = gradeColor,
+                        modifier = Modifier.size(22.dp),
+                    )
+                    Text(
+                        text = "Prediction Result",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .background(
+                            color = gradeColor.copy(alpha = 0.18f),
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(50),
+                        )
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                ) {
+                    Text(
+                        text = "$gradeEmoji ${result.grade}",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = gradeColor,
+                    )
+                }
+            }
+
+            HorizontalDivider(
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                thickness = 1.dp,
+            )
+
+            // Price comparison: Predicted vs Actual
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column {
+                    Text(
+                        text = "Price at Prediction",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = "₹${"%.2f".format(result.priceAtPrediction)}",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "Predicted",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        text = "₹${"%.2f".format(result.prediction.targetPrice)}",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "Actual",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = gradeColor,
+                    )
+                    Text(
+                        text = "₹${"%.2f".format(result.actualPrice)}",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                        color = gradeColor,
+                    )
+                }
+            }
+
+            // Visual bar: predicted vs actual position between low and high
+            PredictionVsActualBar(result = result, gradeColor = gradeColor)
+
+            HorizontalDivider(
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                thickness = 1.dp,
+            )
+
+            // Error & Checks
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column {
+                    Text(
+                        text = "Price Error",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    val errorSign = if (result.priceError >= 0) "+" else ""
+                    Text(
+                        text = "$errorSign${"%.2f".format(result.priceError)} (${"%.2f".format(result.errorPercent)}%)",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = if (result.errorPercent < 0.15) MaterialTheme.extendedColors.gainColor
+                                else MaterialTheme.extendedColors.lossColor,
+                    )
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "$directionEmoji Direction: ${if (result.directionCorrect) "Correct" else "Wrong"}",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "$rangeEmoji Within Range: ${if (result.withinRange) "Yes" else "No"}",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PredictionVsActualBar(result: PredictionResult, gradeColor: androidx.compose.ui.graphics.Color) {
+    val low = result.prediction.targetLow
+    val high = result.prediction.targetHigh
+    val range = high - low
+    if (range <= 0) return
+
+    val predictedFraction = ((result.prediction.targetPrice - low) / range).toFloat().coerceIn(0f, 1f)
+    val actualFraction = ((result.actualPrice - low) / range).toFloat().coerceIn(-0.1f, 1.1f)
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            text = "Target Range: ₹${"%.2f".format(low)} — ₹${"%.2f".format(high)}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(28.dp),
+        ) {
+            // Track
+            Canvas(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(28.dp),
+            ) {
+                val trackY = size.height / 2
+                val trackH = 8.dp.toPx()
+                val cornerR = trackH / 2
+
+                // Full range bar
+                drawRoundRect(
+                    color = gradeColor.copy(alpha = 0.12f),
+                    topLeft = Offset(0f, trackY - trackH / 2),
+                    size = Size(size.width, trackH),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(cornerR),
+                )
+
+                // Predicted marker (blue diamond)
+                val predX = (predictedFraction * size.width).coerceIn(6f, size.width - 6f)
+                val diamondSize = 10.dp.toPx()
+                val diamondPath = Path().apply {
+                    moveTo(predX, trackY - diamondSize)
+                    lineTo(predX + diamondSize * 0.7f, trackY)
+                    lineTo(predX, trackY + diamondSize)
+                    lineTo(predX - diamondSize * 0.7f, trackY)
+                    close()
+                }
+                drawPath(diamondPath, color = androidx.compose.ui.graphics.Color(0xFF2196F3))
+
+                // Actual marker (circle)
+                val actX = (actualFraction * size.width).coerceIn(6f, size.width - 6f)
+                drawCircle(
+                    color = gradeColor,
+                    radius = 7.dp.toPx(),
+                    center = Offset(actX, trackY),
+                )
+                drawCircle(
+                    color = androidx.compose.ui.graphics.Color.White,
+                    radius = 3.dp.toPx(),
+                    center = Offset(actX, trackY),
+                )
+            }
+        }
+        // Legend
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .background(
+                            color = androidx.compose.ui.graphics.Color(0xFF2196F3),
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(1.dp),
+                        ),
+                )
+                Text(
+                    text = "Predicted",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .background(color = gradeColor, shape = androidx.compose.foundation.shape.CircleShape),
+                )
+                Text(
+                    text = "Actual",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
@@ -1300,5 +1696,3 @@ fun formatCandleTimestamp(dateStr: String, period: ChartPeriod): String {
         }
     }
 }
-
-

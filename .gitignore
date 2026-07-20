@@ -13,3 +13,8 @@
 .externalNativeBuild
 .cxx
 local.properties
+/ml_pipeline/venv/
+/ml_pipeline/__pycache__/
+/ml_pipeline/*.csv
+/ml_pipeline/*.pkl
+/log.txt
